@@ -1,0 +1,8 @@
+# Ignore environment variables
+.env
+
+# Node and Python related ignores
+node_modules/
+__pycache__/
+*.pyc
+.env.local
