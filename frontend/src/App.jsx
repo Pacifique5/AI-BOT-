@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 
+// Backend API configuration
+const API_BASE_URL = 'http://localhost:8000';
+
 export default function App() {
   const [messages, setMessages] = useState([
     { id: 1, role: 'assistant', content: "Hey — I'm your AI bot. Say hi!" }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -22,6 +26,23 @@ export default function App() {
     }
   }, [input]);
 
+  // Check backend connection on mount
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/health`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(3000) // 3 second timeout
+        });
+        setBackendConnected(res.ok);
+      } catch (error) {
+        console.warn('Backend health check failed:', error);
+        setBackendConnected(false);
+      }
+    };
+    checkBackend();
+  }, []);
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
     
@@ -31,38 +52,88 @@ export default function App() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/chat', {
+      // Format messages for backend API (remove id field, keep only role and content)
+      const apiMessages = messages
+        .filter(msg => msg.role !== 'system') // Filter out system messages
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content
+        }));
+      
+      // Add the new user message
+      apiMessages.push({
+        role: 'user',
+        content: userMsg.content
+      });
+
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          messages: [...messages, userMsg],
+          messages: apiMessages,
           persona: "You are a friendly assistant who answers clearly and briefly."
         })
+      }).catch((fetchError) => {
+        // Network error - backend might not be running
+        console.error('Fetch error:', fetchError);
+        setBackendConnected(false);
+        throw new Error(
+          `Cannot connect to backend server at ${API_BASE_URL}. ` +
+          `Make sure the backend is running. Error: ${fetchError.message}`
+        );
       });
       
+      if (!res.ok) {
+        let errorData;
+        try {
+          errorData = await res.json();
+        } catch {
+          errorData = { 
+            error: true, 
+            detail: { message: `HTTP ${res.status}: ${res.statusText}` } 
+          };
+        }
+        throw new Error(errorData.detail?.message || errorData.detail || `HTTP ${res.status}: ${res.statusText}`);
+      }
+      
       const data = await res.json();
+      
       if (data.error) {
+        // Handle error response from backend
+        const errorMsg = data.detail?.message || data.detail || 'Something went wrong';
         setMessages(prev => [...prev, { 
           id: Date.now(), 
           role: 'assistant', 
-          content: `Error: ${data.detail?.message || data.detail || 'Something went wrong'}` 
+          content: `Error: ${errorMsg}` 
         }]);
-      } else {
+      } else if (data.reply) {
+        // Success - add assistant reply
+        setBackendConnected(true);
         setMessages(prev => [...prev, { 
           id: Date.now(), 
           role: 'assistant', 
           content: data.reply 
         }]);
+      } else {
+        // Unexpected response format
+        setMessages(prev => [...prev, { 
+          id: Date.now(), 
+          role: 'assistant', 
+          content: 'Error: Unexpected response format from server.' 
+        }]);
       }
-    } catch {
+    } catch (error) {
+      console.error('Error sending message:', error);
       setMessages(prev => [...prev, { 
         id: Date.now(), 
         role: 'assistant', 
-        content: 'Network error. Please check if the backend server is running.' 
+        content: error.message || 'Network error. Please check if the backend server is running.' 
       }]);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   const handleKey = (e) => {
@@ -77,6 +148,30 @@ export default function App() {
       <div className="chat-header">
         <h1>🤖 AI Chatbot</h1>
         <p>Ask me anything!</p>
+        {backendConnected === false && (
+          <div style={{ 
+            background: '#ff4444', 
+            color: 'white', 
+            padding: '8px 12px', 
+            borderRadius: '4px', 
+            fontSize: '14px',
+            marginTop: '8px'
+          }}>
+            ⚠️ Backend server not connected. Make sure it's running on {API_BASE_URL}
+          </div>
+        )}
+        {backendConnected === true && (
+          <div style={{ 
+            background: '#44ff44', 
+            color: 'white', 
+            padding: '8px 12px', 
+            borderRadius: '4px', 
+            fontSize: '14px',
+            marginTop: '8px'
+          }}>
+            ✓ Backend connected
+          </div>
+        )}
       </div>
 
       <div className="chat-messages">
